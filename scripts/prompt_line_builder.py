@@ -1,9 +1,9 @@
 import os
-from typing import List, Optional
+from typing import List
 
 import gradio as gr
 
-from modules import script_callbacks
+from modules import script_callbacks, sd_models, sd_samplers, shared
 
 
 EXTENSION_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -15,6 +15,38 @@ def ensure_lists_dir() -> str:
     return LISTS_DIR
 
 
+def get_sd_model_choices() -> List[str]:
+    titles = [x.title for x in sd_models.checkpoints_list.values()]
+    return ["未選択"] + titles
+
+
+def get_sampler_choices() -> List[str]:
+    return ["未選択"] + sd_samplers.visible_sampler_names()
+
+
+def get_style_choices() -> List[str]:
+    if shared.prompt_styles is None:
+        return ["未選択"]
+
+    choices: List[str] = ["未選択"]
+
+    # styles.csv -> styles_integrated.csv の順を維持
+    for name, style in shared.prompt_styles.styles.items():
+        if not name or name == "None":
+            continue
+        if getattr(style, "path", None) == "do_not_save":
+            continue
+        choices.append(name)
+
+    return choices
+
+
+def _quote_value(value: str) -> str:
+    """Wrap value in double quotes and escape inner quotes."""
+    escaped = value.replace("\"", "\\\"")
+    return f'"{escaped}"'
+
+
 def _build_prompt_line(
     prompt: str,
     negative_prompt: str,
@@ -22,19 +54,19 @@ def _build_prompt_line(
     outpath_grids: str,
     prompt_for_display: str,
     styles: str,
-    seed: Optional[float],
-    subseed_strength: Optional[float],
-    subseed: Optional[float],
-    seed_resize_from_h: Optional[float],
-    seed_resize_from_w: Optional[float],
-    sampler_index: Optional[float],
+    seed,
+    subseed_strength,
+    subseed,
+    seed_resize_from_h,
+    seed_resize_from_w,
+    sampler_index,
     sampler_name: str,
-    batch_size: Optional[float],
-    n_iter: Optional[float],
-    steps: Optional[float],
-    cfg_scale: Optional[float],
-    width: Optional[float],
-    height: Optional[float],
+    batch_size,
+    n_iter,
+    steps,
+    cfg_scale,
+    width,
+    height,
     restore_faces: bool,
     tiling: bool,
     do_not_save_samples: bool,
@@ -45,19 +77,22 @@ def _build_prompt_line(
     def add_str(tag: str, value: str):
         if value is None:
             return
-        value = value.strip()
-        if not value:
+        value = str(value).strip()
+        if not value or value == "未選択":
             return
-        parts.append(f"--{tag} {value}")
+        parts.append(f"--{tag} {_quote_value(value)}")
 
-    def add_num(tag: str, value: Optional[float]):
+    def add_num(tag: str, value):
         if value is None:
             return
-        v = float(value)
-        parts.append(f"--{tag} {int(v) if v.is_integer() else v}")
+        v = str(value).strip()
+        if not v:
+            return
+        parts.append(f"--{tag} {v}")
 
     def add_bool(tag: str, value: bool):
-        parts.append(f"--{tag} {'true' if value else 'false'}")
+        if value:
+            parts.append(f"--{tag} true")
 
     add_str("prompt", prompt)
     add_str("negative_prompt", negative_prompt)
@@ -80,14 +115,10 @@ def _build_prompt_line(
     add_num("width", width)
     add_num("height", height)
 
-    if restore_faces:
-        add_bool("restore_faces", True)
-    if tiling:
-        add_bool("tiling", True)
-    if do_not_save_samples:
-        add_bool("do_not_save_samples", True)
-    if do_not_save_grid:
-        add_bool("do_not_save_grid", True)
+    add_bool("restore_faces", restore_faces)
+    add_bool("tiling", tiling)
+    add_bool("do_not_save_samples", do_not_save_samples)
+    add_bool("do_not_save_grid", do_not_save_grid)
 
     return " ".join(parts)
 
@@ -100,19 +131,19 @@ def add_line(
     outpath_grids: str,
     prompt_for_display: str,
     styles: str,
-    seed: Optional[float],
-    subseed_strength: Optional[float],
-    subseed: Optional[float],
-    seed_resize_from_h: Optional[float],
-    seed_resize_from_w: Optional[float],
-    sampler_index: Optional[float],
+    seed,
+    subseed_strength,
+    subseed,
+    seed_resize_from_h,
+    seed_resize_from_w,
+    sampler_index,
     sampler_name: str,
-    batch_size: Optional[float],
-    n_iter: Optional[float],
-    steps: Optional[float],
-    cfg_scale: Optional[float],
-    width: Optional[float],
-    height: Optional[float],
+    batch_size,
+    n_iter,
+    steps,
+    cfg_scale,
+    width,
+    height,
     restore_faces: bool,
     tiling: bool,
     do_not_save_samples: bool,
@@ -158,16 +189,6 @@ def clear_lines() -> str:
     return ""
 
 
-def list_saved_files() -> List[str]:
-    ensure_lists_dir()
-    files = []
-    for name in os.listdir(LISTS_DIR):
-        if name.lower().endswith(".txt"):
-            files.append(name)
-    files.sort()
-    return files
-
-
 def save_lines(text: str, file_name: str):
     ensure_lists_dir()
 
@@ -183,35 +204,7 @@ def save_lines(text: str, file_name: str):
         f.write(text or "")
 
     message = f"保存しました: {path}"
-    return message, gr.update(choices=list_saved_files(), value=file_name)
-
-
-def load_lines(file_name: str):
-    ensure_lists_dir()
-    file_name = (file_name or "").strip()
-    if not file_name:
-        return "", gr.update()
-
-    path = os.path.join(LISTS_DIR, file_name)
-    if not os.path.isfile(path):
-        return "", gr.update()
-
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        text = f.read()
-
-    return text, gr.update(value=file_name, choices=list_saved_files())
-
-
-def load_from_upload(file):
-    if file is None:
-        return "", gr.update()
-
-    try:
-        content = file.decode("utf-8", errors="ignore")
-    except Exception:
-        content = ""
-
-    return content, gr.update()
+    return message
 
 
 _initialized_txt2img = False
@@ -227,121 +220,145 @@ def _create_ui(is_img2img: bool):
         elem_id=f"{id_part}_prompt_line_builder",
         elem_classes=["prompt-line-builder-container"],
     ):
-        gr.Markdown("### Line 設定")
-
-        line_prompt = gr.Textbox(
-            label="ライン用プロンプト (prompt)",
-            lines=2,
-            placeholder="この行で使うポジティブプロンプト",
-        )
-        line_negative_prompt = gr.Textbox(
-            label="ライン用ネガティブプロンプト (negative_prompt)",
-            lines=2,
-            placeholder="この行で使うネガティブプロンプト (必要な場合)",
-        )
-
         with gr.Row():
-            sd_model = gr.Textbox(
-                label="sd_model (チェックポイント名)",
-                placeholder="例: AnythingV3, chilloutmix など。空欄で現在のモデルを使用",
-            )
-
-        with gr.Row():
-            sampler_name = gr.Textbox(
-                label="sampler_name",
-                placeholder="例: Euler a, DPM++ 2M Karras など。空欄で現在の設定を使用",
-            )
-
-        with gr.Row():
-            seed = gr.Number(label="seed", value=None, precision=0)
-            batch_size = gr.Number(label="batch_size", value=None, precision=0)
-            n_iter = gr.Number(label="n_iter", value=None, precision=0)
-
-        with gr.Row():
-            steps = gr.Number(label="steps", value=None, precision=0)
-            cfg_scale = gr.Number(label="cfg_scale", value=None)
-
-        with gr.Row():
-            width = gr.Number(label="width", value=None, precision=0)
-            height = gr.Number(label="height", value=None, precision=0)
-
-        with gr.Row():
-            restore_faces = gr.Checkbox(label="restore_faces", value=False)
-            tiling = gr.Checkbox(label="tiling", value=False)
-
-        styles = gr.Textbox(
-            label="styles",
-            placeholder="Style 名 (カンマ区切り / 任意)",
-        )
-
-        with gr.Accordion("Advanced / 詳細設定", open=False):
-            with gr.Row():
-                sampler_index = gr.Number(
-                    label="sampler_index",
-                    value=None,
-                    precision=0,
+            # left: prompts and line controls
+            with gr.Column(scale=7):
+                line_prompt = gr.Textbox(
+                    label="Line prompt (prompt)",
+                    lines=3,
+                )
+                line_negative_prompt = gr.Textbox(
+                    label="Line negative prompt (negative_prompt)",
+                    lines=3,
                 )
 
-            with gr.Row():
-                subseed = gr.Number(label="subseed", value=None, precision=0)
-                subseed_strength = gr.Number(
-                    label="subseed_strength", value=None
-                )
+                with gr.Row():
+                    add_button = gr.Button("行を追加")
+                    clear_button = gr.Button("全行をクリア")
 
-            with gr.Row():
-                seed_resize_from_w = gr.Number(
-                    label="seed_resize_from_w", value=None, precision=0
-                )
-                seed_resize_from_h = gr.Number(
-                    label="seed_resize_from_h", value=None, precision=0
-                )
+            # right: parameter controls
+            with gr.Column(scale=3):
+                # row 1: sd_model, sampler_name, styles (dropdowns)
+                with gr.Row():
+                    sd_model = gr.Dropdown(
+                        label="sd_model",
+                        choices=get_sd_model_choices(),
+                        value="未選択",
+                        elem_classes=["plb-dropdown"],
+                    )
+                    sampler_name = gr.Dropdown(
+                        label="sampler_name",
+                        choices=get_sampler_choices(),
+                        value="未選択",
+                        elem_classes=["plb-dropdown"],
+                    )
+                    styles = gr.Dropdown(
+                        label="styles",
+                        choices=get_style_choices(),
+                        value="未選択",
+                        elem_classes=["plb-dropdown"],
+                    )
 
-            prompt_for_display = gr.Textbox(
-                label="prompt_for_display",
-                placeholder="表示用に整形したプロンプト (任意)",
-            )
+                # row 2: seed, batch_size, n_iter, steps
+                with gr.Row():
+                    seed = gr.Number(
+                        label="seed",
+                        value=None,
+                        elem_classes=["plb-row2-number"],
+                    )
+                    batch_size = gr.Number(
+                        label="batch_size",
+                        value=None,
+                        elem_classes=["plb-row2-number"],
+                    )
+                    n_iter = gr.Number(
+                        label="n_iter",
+                        value=None,
+                        elem_classes=["plb-row2-number"],
+                    )
+                    steps = gr.Number(
+                        label="steps",
+                        value=None,
+                        elem_classes=["plb-row3-number"],
+                    )
 
-            outpath_grids = gr.Textbox(
-                label="outpath_grids",
-                placeholder="グリッド画像の保存先フォルダ (任意)",
-            )
+                # row 3: cfg_scale, width, height, restore_faces, tiling
+                with gr.Row():
+                    cfg_scale = gr.Number(
+                        label="cfg_scale",
+                        value=None,
+                        elem_classes=["plb-row3-number"],
+                    )
+                    width = gr.Number(
+                        label="width",
+                        value=None,
+                        elem_classes=["plb-row3-number"],
+                    )
+                    height = gr.Number(
+                        label="height",
+                        value=None,
+                        elem_classes=["plb-row3-number"],
+                    )
+                    restore_faces = gr.Checkbox(label="restore_faces", value=False)
+                    tiling = gr.Checkbox(label="tiling", value=False)
 
-            with gr.Row():
-                do_not_save_samples = gr.Checkbox(
-                    label="do_not_save_samples", value=False
-                )
-                do_not_save_grid = gr.Checkbox(
-                    label="do_not_save_grid", value=False
-                )
+                # row 4: Advanced
+                with gr.Accordion("Advanced / 詳細設定", open=False):
+                    sampler_index = gr.Number(
+                        label="sampler_index",
+                        value=None,
+                    )
 
-        gr.Markdown("### 出力・ファイル設定")
+                    with gr.Row():
+                        subseed = gr.Number(
+                            label="subseed",
+                            value=None,
+                            elem_classes=["plb-row3-number"],
+                        )
+                        subseed_strength = gr.Number(
+                            label="subseed_strength",
+                            value=None,
+                            elem_classes=["plb-row3-number"],
+                        )
 
-        lines_text = gr.Textbox(
-            label="現在のライン一覧 (Prompts from file or textbox 用)",
-            lines=8,
-            placeholder="ここに 1 行ずつコマンド形式で保存されます",
-        )
+                    with gr.Row():
+                        seed_resize_from_w = gr.Number(
+                            label="seed_resize_from_w",
+                            value=None,
+                            elem_classes=["plb-row3-number"],
+                        )
+                        seed_resize_from_h = gr.Number(
+                            label="seed_resize_from_h",
+                            value=None,
+                            elem_classes=["plb-row3-number"],
+                        )
 
+                    prompt_for_display = gr.Textbox(label="prompt_for_display")
+                    outpath_grids = gr.Textbox(label="outpath_grids")
+
+                    with gr.Row():
+                        do_not_save_samples = gr.Checkbox(
+                            label="do_not_save_samples", value=False
+                        )
+                        do_not_save_grid = gr.Checkbox(
+                            label="do_not_save_grid", value=False
+                        )
+
+        # lines + file/save area: 7:3 layout
         with gr.Row():
-            add_button = gr.Button("行を追加")
-            clear_button = gr.Button("全行をクリア")
+            with gr.Column(scale=7):
+                lines_text = gr.Textbox(
+                    label="Current lines (Prompts from file or textbox)",
+                    lines=8,
+                    elem_id=f"{id_part}_prompt_line_builder_lines",
+                )
 
-        with gr.Row():
-            file_name = gr.Textbox(
-                label="ファイル名 (.txt)",
-                placeholder="prompt_list.txt",
-                value="prompt_list.txt",
-            )
-            saved_files = gr.Dropdown(
-                label="保存済みファイル",
-                choices=list_saved_files(),
-                value=None,
-            )
-
-        upload_file = gr.File(
-            label="外部の txt を読み込む",
-            type="binary",
-        )
+            with gr.Column(scale=3):
+                file_name = gr.Textbox(
+                    label="File name (.txt)",
+                    value="prompt_list.txt",
+                )
+                save_btn = gr.Button("txt に保存")
 
         status = gr.HTML(value="")
 
@@ -378,25 +395,10 @@ def _create_ui(is_img2img: bool):
 
         clear_button.click(fn=clear_lines, inputs=[], outputs=[lines_text])
 
-        save_btn = gr.Button("txt に保存")
         save_btn.click(
             fn=save_lines,
             inputs=[lines_text, file_name],
-            outputs=[status, saved_files],
-        )
-
-        load_btn = gr.Button("選択したファイルを読み込み")
-        load_btn.click(
-            fn=load_lines,
-            inputs=[saved_files],
-            outputs=[lines_text, saved_files],
-        )
-
-        upload_file.upload(
-            fn=load_from_upload,
-            inputs=[upload_file],
-            outputs=[lines_text, file_name],
-            show_progress=False,
+            outputs=[status],
         )
 
 

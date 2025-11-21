@@ -4,3 +4,37 @@
   width: 100%;
   margin-top: 0.75rem;
 }
+
+/* row2 numbers (batch_size, n_iter, seed) a bit narrow */
+.prompt-line-builder-container .plb-row2-number {
+  flex: 0 0 auto;
+  width: 6em;
+  min-width: 0 !important;
+}
+
+/* row3 numbers (width, height, steps, cfg_scale) narrower so 4 columns fit */
+.prompt-line-builder-container .plb-row3-number {
+  flex: 0 0 auto;
+  width: 5em;
+  min-width: 0 !important;
+}
+
+/* dropdowns: use full available row width */
+.prompt-line-builder-container .plb-dropdown {
+  width: 100%;
+  min-width: 0;
+}
+
+/* dropdown menus in Prompt Line Builder: allow long model names */
+.prompt-line-builder-container .gradio-dropdown .options,
+.prompt-line-builder-container .gradio-dropdown ul.options {
+  width: max-content !important;
+  min-width: 100% !important;
+  max-width: 90vw !important;
+  overflow-x: visible !important;
+}
+
+.prompt-line-builder-container .gradio-dropdown .options *,
+.prompt-line-builder-container .gradio-dropdown ul.options * {
+  white-space: nowrap;
+}
