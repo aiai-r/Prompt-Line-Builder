@@ -1,5 +1,7 @@
 // Prompt Line Builder UI adjustments
 
+const promptLineBuilderReadyObservers = {};
+
 function movePromptLineBuilder(idPart) {
     const app = gradioApp ? gradioApp() : document;
     if (!app) return;
@@ -55,18 +57,69 @@ function setupPromptLineDrop(idPart) {
     textarea.addEventListener('drop', handleDrop);
 }
 
-function clearPromptLineNumberDefaults(idPart) {
+function onPromptLineBuilderReady(idPart, callback) {
     const app = gradioApp ? gradioApp() : document;
     if (!app) return;
 
-    const builder = app.querySelector(`#${idPart}_prompt_line_builder`);
-    if (!builder) return;
+    const selector = `#${idPart}_prompt_line_builder`;
+    const existing = app.querySelector(selector);
+    if (existing) {
+        callback(existing);
+        return;
+    }
 
-    const inputs = builder.querySelectorAll('.plb-row2-number input[type="number"], .plb-row3-number input[type="number"]');
-    inputs.forEach((inp) => {
-        if (inp.value === '0' || inp.value === 0) {
-            inp.value = '';
+    if (promptLineBuilderReadyObservers[idPart]) {
+        return;
+    }
+
+    const target = app === document ? document.documentElement : app;
+
+    const observer = new MutationObserver(() => {
+        const builderEl = app.querySelector(selector);
+        if (!builderEl) {
+            return;
         }
+        observer.disconnect();
+        delete promptLineBuilderReadyObservers[idPart];
+        callback(builderEl);
+    });
+
+    observer.observe(target, { childList: true, subtree: true });
+    promptLineBuilderReadyObservers[idPart] = observer;
+}
+
+function clearPromptLineNumberDefaults(idPart) {
+    onPromptLineBuilderReady(idPart, (builder) => {
+        if (builder.dataset.plbNumbersCleared === '1') return;
+
+        const clearInputs = () => {
+            const inputs = builder.querySelectorAll('.plb-row2-number input[type="number"], .plb-row3-number input[type="number"]');
+            if (!inputs.length) {
+                return false;
+            }
+
+            inputs.forEach((inp) => {
+                if (inp.value === '0' || inp.value === 0) {
+                    inp.value = '';
+                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+
+            builder.dataset.plbNumbersCleared = '1';
+            return true;
+        };
+
+        if (clearInputs()) {
+            return;
+        }
+
+        const observer = new MutationObserver(() => {
+            if (clearInputs()) {
+                observer.disconnect();
+            }
+        });
+        observer.observe(builder, { childList: true, subtree: true });
     });
 }
 

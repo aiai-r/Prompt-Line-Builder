@@ -85,8 +85,11 @@ def _build_prompt_line(
     def add_num(tag: str, value):
         if value is None:
             return
+        # Gradio Number may supply 0 as an initial placeholder; treat 0/"" as未入力
+        if isinstance(value, (int, float)) and value == 0:
+            return
         v = str(value).strip()
-        if not v:
+        if not v or v == "0":
             return
         parts.append(f"--{tag} {v}")
 
@@ -307,6 +310,7 @@ def _create_ui(is_img2img: bool):
                     sampler_index = gr.Number(
                         label="sampler_index",
                         value=None,
+                        elem_classes=["plb-row3-number"],
                     )
 
                     with gr.Row():
